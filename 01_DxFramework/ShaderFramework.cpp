@@ -35,12 +35,16 @@ ID3DXFont*              gpFont = NULL;
 LPD3DXMESH              gpSphere = NULL;
 
 // Shaders
-LPD3DXEFFECT            gpColorShader = NULL;
+LPD3DXEFFECT            gpTextureMappingShader = NULL;
 
 // Textures
+LPDIRECT3DTEXTURE9      gpEarthDM = NULL;
 
 // Application name
 const char*				gAppName = "Super Simple Shader Demo Framework";
+
+// Rotation
+float gRotY = 0.0f;
 
 
 //-----------------------------------------------------------------------
@@ -167,7 +171,6 @@ void RenderFrame()
 // draw 3D objects and so on
 void RenderScene()
 {
-
     // View Matrix
     D3DXMATRIXA16 matView;
     D3DXVECTOR3 vEyePt(0.0f, 0.0f, -200.0f);
@@ -179,25 +182,33 @@ void RenderScene()
     D3DXMATRIXA16 matProjection;
     D3DXMatrixPerspectiveFovLH(&matProjection, FOV, ASPECT_RATIO, NEAR_PLANE, FAR_PLANE);
 
-    // World Matrix
-    D3DXMATRIXA16 matWorld;
-    D3DXMatrixIdentity(&matWorld);
+    gRotY += 0.4f * PI / 180.0f;
 
-    gpColorShader->SetMatrix("gWorldMatrix", &matWorld);
-    gpColorShader->SetMatrix("gViewMatrix", &matView);
-    gpColorShader->SetMatrix("gProjectionMatrix", &matProjection);
-
-    UINT numPasses = 0;
-    gpColorShader->Begin(&numPasses, NULL);
-    
-    for (UINT i = 0; i < numPasses; ++i)
+    if (gRotY > 2 * PI)
     {
-        gpColorShader->BeginPass(i);
-        gpSphere->DrawSubset(0);
-        gpColorShader->EndPass();
+        gRotY -= 2 * PI;
     }
 
-    gpColorShader->End();
+    // World Matrix
+    D3DXMATRIXA16 matWorld;
+    D3DXMatrixRotationY(&matWorld, gRotY);
+
+    gpTextureMappingShader->SetMatrix("gWorldMatrix", &matWorld);
+    gpTextureMappingShader->SetMatrix("gViewMatrix", &matView);
+    gpTextureMappingShader->SetMatrix("gProjectionMatrix", &matProjection);
+    gpTextureMappingShader->SetTexture("DiffuseMap_Tex", gpEarthDM);
+
+    UINT numPasses = 0;
+    gpTextureMappingShader->Begin(&numPasses, NULL);
+
+    for (UINT i = 0; i < numPasses; ++i)
+    {
+        gpTextureMappingShader->BeginPass(i);
+        gpSphere->DrawSubset(0);
+        gpTextureMappingShader->EndPass();
+    }
+
+    gpTextureMappingShader->End();
 }
 
 // show debug info
@@ -225,12 +236,15 @@ bool InitEverything(HWND hWnd)
     // init D3D
     if (!InitD3D(hWnd))
     {
+        OutputDebugString("Failed to Init D3D.");
+
         return false;
     }
 
     // loading models, shaders and textures
     if (!LoadAssets())
     {
+        OutputDebugString("Failed to load assets.");
         return false;
     }
 
@@ -288,11 +302,17 @@ bool InitD3D(HWND hWnd)
 bool LoadAssets()
 {
     // texture loading
+    gpEarthDM = LoadTexture("Earth.jpg");
+
+    if (!gpEarthDM)
+    {
+        return false;
+    }
 
     // shader loading
-    gpColorShader = LoadShader("ColorShader.fx");
+    gpTextureMappingShader = LoadShader("TextureMapping.fx");
 
-    if (!gpColorShader)
+    if (!gpTextureMappingShader)
     {
         return false;
     }
@@ -390,13 +410,18 @@ void Cleanup()
     }
 
     // release shaders
-    if (gpColorShader)
+    if (gpTextureMappingShader)
     {
-        gpColorShader->Release();
-        gpColorShader = NULL;
+        gpTextureMappingShader->Release();
+        gpTextureMappingShader = NULL;
     }
 
     // release textures
+    if (gpEarthDM)
+    {
+        gpEarthDM->Release();
+        gpEarthDM = NULL;
+    }
 
     // release D3D
     if (gpD3DDevice)
