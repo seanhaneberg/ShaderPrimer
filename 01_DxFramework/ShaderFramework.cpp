@@ -37,9 +37,14 @@ ID3DXFont*              gpFont = NULL;
 LPD3DXMESH              gpSphere = NULL;
 
 // Shaders
-LPD3DXEFFECT            gpLightingShader = NULL;
+LPD3DXEFFECT            gpSpecularMappingShader = NULL;
 
 // Textures
+LPDIRECT3DTEXTURE9      gpStoneDM = NULL;
+LPDIRECT3DTEXTURE9      gpStoneSM = NULL;
+
+// Light Color
+D3DXVECTOR4             gLightColor(0.7f, 0.7f, 1.0f, 1.0f);
 
 // Application name
 const char*				gAppName = "Super Simple Shader Demo Framework";
@@ -194,23 +199,26 @@ void RenderScene()
     D3DXMATRIXA16 matWorld;
     D3DXMatrixRotationY(&matWorld, gRotY);
 
-    gpLightingShader ->SetMatrix("gWorldMatrix", &matWorld);
-    gpLightingShader->SetMatrix("gViewMatrix", &matView);
-    gpLightingShader->SetMatrix("gProjectionMatrix", &matProjection);
-    gpLightingShader->SetVector("gWorldLightPosition", &gWorldLightPosition);
-    gpLightingShader->SetVector("gWorldCameraPosition", &gWorldCameraPosition);
+    gpSpecularMappingShader ->SetMatrix("gWorldMatrix", &matWorld);
+    gpSpecularMappingShader->SetMatrix("gViewMatrix", &matView);
+    gpSpecularMappingShader->SetMatrix("gProjectionMatrix", &matProjection);
+    gpSpecularMappingShader->SetVector("gWorldLightPosition", &gWorldLightPosition);
+    gpSpecularMappingShader->SetVector("gWorldCameraPosition", &gWorldCameraPosition);
+    gpSpecularMappingShader->SetVector("gLightColor", &gLightColor);
+    gpSpecularMappingShader->SetTexture("DiffuseMap_Tex", gpStoneDM);
+    gpSpecularMappingShader->SetTexture("SpecularMap_Tex", gpStoneSM);
 
     UINT numPasses = 0;
-    gpLightingShader->Begin(&numPasses, NULL);
+    gpSpecularMappingShader->Begin(&numPasses, NULL);
 
     for (UINT i = 0; i < numPasses; ++i)
     {
-        gpLightingShader->BeginPass(i);
+        gpSpecularMappingShader->BeginPass(i);
         gpSphere->DrawSubset(0);
-        gpLightingShader->EndPass();
+        gpSpecularMappingShader->EndPass();
     }
 
-    gpLightingShader->End();
+    gpSpecularMappingShader->End();
 }
 
 // show debug info
@@ -303,11 +311,25 @@ bool InitD3D(HWND hWnd)
 
 bool LoadAssets()
 {
-    
-    // shader loading
-    gpLightingShader = LoadShader("Lighting.fx");
+    // loading textures
+    gpStoneDM = LoadTexture("Fieldstone_DM.tga");
 
-    if (!gpLightingShader)
+    if (!gpStoneDM)
+    {
+        return false;
+    }
+
+    gpStoneSM = LoadTexture("Fieldstone_SM.tga");
+
+    if (!gpStoneSM)
+    {
+        return false;
+    }
+
+    // shader loading
+    gpSpecularMappingShader = LoadShader("SpecularMapping.fx");
+
+    if (!gpSpecularMappingShader)
     {
         return false;
     }
@@ -405,10 +427,22 @@ void Cleanup()
     }
 
     // release shaders
-    if (gpLightingShader)
+    if (gpSpecularMappingShader)
     {
-        gpLightingShader->Release();
-        gpLightingShader = NULL;
+        gpSpecularMappingShader->Release();
+        gpSpecularMappingShader = NULL;
+    }
+
+    if (gpStoneDM)
+    {
+        gpStoneDM->Release();
+        gpStoneDM = NULL;
+    }
+
+    if (gpStoneSM)
+    {
+        gpStoneSM->Release();
+        gpStoneSM = NULL;
     }
 
     // release D3D
