@@ -30,17 +30,22 @@ LPDIRECT3DDEVICE9       gpD3DDevice = NULL;				// D3D device
 D3DXVECTOR4             gWorldLightPosition(500.0f, 500.0f, -500.0f, 1.0f);
 D3DXVECTOR4             gWorldCameraPosition(0.0f, 0.0f, -200.0f, 1.0f);
 
+// Textures
+LPDIRECT3DTEXTURE9      gpStoneDM = NULL;
+LPDIRECT3DTEXTURE9      gpStoneSM = NULL;
+LPDIRECT3DTEXTURE9      gpStoneNM = NULL;
+
 // Fonts
 ID3DXFont*              gpFont = NULL;
 
 // Models
-LPD3DXMESH              gpTeapot = NULL;
+LPD3DXMESH              gpSphere = NULL;
 
 // Surface Color
 D3DXVECTOR4             gSurfaceColor(0, 1, 0, 1);
 
 // Shaders
-LPD3DXEFFECT            gpToonShader = NULL;
+LPD3DXEFFECT            gpNormalMappingShader = NULL;
 
 // Light Color
 D3DXVECTOR4             gLightColor(0.7f, 0.7f, 1.0f, 1.0f);
@@ -207,21 +212,28 @@ void RenderScene()
     D3DXMatrixMultiply(&matWorldView, &matWorld, &matView);
     D3DXMatrixMultiply(&matWorldViewProjection, &matWorldView, &matProjection);
 
-    gpToonShader->SetMatrix("gWorldViewProjectionMatrix", &matWorldViewProjection);
-    gpToonShader->SetMatrix("gInvWorldMatrix", &matInvWorld);
-    gpToonShader->SetVector("gSurfaceColor", &gSurfaceColor);
+    
+
+    gpNormalMappingShader->SetMatrix("gWorldViewProjectionMatrix", &matWorldViewProjection);
+    gpNormalMappingShader->SetMatrix("gWorldMatrix", &matWorld);
+    gpNormalMappingShader->SetVector("gWorldLightPosition", &gWorldLightPosition);
+    gpNormalMappingShader->SetVector("gWorldCameraPosition", &gWorldCameraPosition);
+    gpNormalMappingShader->SetVector("gSurfaceColor", &gSurfaceColor);
+    gpNormalMappingShader->SetTexture("DiffuseMap_Tex", gpStoneDM);
+    gpNormalMappingShader->SetTexture("SpecularMap_Tex", gpStoneSM);
+    gpNormalMappingShader->SetTexture("NormalMap_Tex", gpStoneNM);
 
     UINT numPasses = 0;
-    gpToonShader->Begin(&numPasses, NULL);
+    gpNormalMappingShader->Begin(&numPasses, NULL);
 
     for (UINT i = 0; i < numPasses; ++i)
     {
-        gpToonShader->BeginPass(i);
-        gpTeapot->DrawSubset(0);
-        gpToonShader->EndPass();
+        gpNormalMappingShader->BeginPass(i);
+        gpSphere->DrawSubset(0);
+        gpNormalMappingShader->EndPass();
     }
 
-    gpToonShader->End();
+    gpNormalMappingShader->End();
 }
 
 // show debug info
@@ -315,17 +327,38 @@ bool InitD3D(HWND hWnd)
 bool LoadAssets()
 {
     // shader loading
-    gpToonShader = LoadShader("ToonShader.fx");
+    gpNormalMappingShader = LoadShader("NormalMapping.fx");
 
-    if (!gpToonShader)
+    if (!gpNormalMappingShader)
+    {
+        return false;
+    }
+
+    gpStoneDM = LoadTexture("Fieldstone_DM.tga");
+
+    if (!gpStoneDM)
+    {
+        return false;
+    }
+
+    gpStoneSM = LoadTexture("Fieldstone_SM.tga");
+
+    if (!gpStoneSM)
+    {
+        return false;
+    }
+
+    gpStoneNM = LoadTexture("Fieldstone_NM.tga");
+
+    if (!gpStoneNM)
     {
         return false;
     }
 
     // model loading
-    gpTeapot = LoadModel("Teapot.x");
+    gpSphere = LoadModel("SphereWithTangent.x");
 
-    if (!gpTeapot)
+    if (!gpSphere)
     {
         return false;
     }
@@ -408,17 +441,35 @@ void Cleanup()
     }
 
     // release models
-    if (gpTeapot)
+    if (gpSphere)
     {
-        gpTeapot->Release();
-        gpTeapot = NULL;
+        gpSphere->Release();
+        gpSphere = NULL;
+    }
+
+    if (gpStoneDM)
+    {
+        gpStoneDM->Release();
+        gpStoneDM = NULL;
+    }
+
+    if (gpStoneSM)
+    {
+        gpStoneSM->Release();
+        gpStoneSM = NULL;
+    }
+
+    if (gpStoneNM)
+    {
+        gpStoneNM->Release();
+        gpStoneNM = NULL;
     }
 
     // release shaders
-    if (gpToonShader)
+    if (gpNormalMappingShader)
     {
-        gpToonShader->Release();
-        gpToonShader = NULL;
+        gpNormalMappingShader->Release();
+        gpNormalMappingShader = NULL;
     }
 
     // release D3D
