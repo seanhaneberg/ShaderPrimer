@@ -30,26 +30,30 @@ LPDIRECT3DDEVICE9       gpD3DDevice = NULL;				// D3D device
 D3DXVECTOR4             gWorldLightPosition(500.0f, 500.0f, -500.0f, 1.0f);
 D3DXVECTOR4             gWorldCameraPosition(0.0f, 0.0f, -200.0f, 1.0f);
 
-// Textures
-LPDIRECT3DTEXTURE9      gpStoneDM = NULL;
-LPDIRECT3DTEXTURE9      gpStoneSM = NULL;
-LPDIRECT3DTEXTURE9      gpStoneNM = NULL;
-LPDIRECT3DCUBETEXTURE9  gpSnowENV = NULL;
-
 // Fonts
 ID3DXFont*              gpFont = NULL;
 
 // Models
+LPD3DXMESH              gpDisc = NULL;
 LPD3DXMESH              gpTorus = NULL;
 
 // Surface Color
-D3DXVECTOR4             gSurfaceColor(0, 1, 0, 1);
+D3DXVECTOR4             gTorusColor(1, 1, 0, 1);
+D3DXVECTOR4             gDiscColor(0, 1, 1, 1);
+
+// Shadow Map Render Target
+LPDIRECT3DTEXTURE9      gpShadowRenderTarget = NULL;
+LPDIRECT3DSURFACE9      gpShadowDepthStencil = NULL;
 
 // Shaders
-LPD3DXEFFECT            gpUVAnimationShader = NULL;
+LPD3DXEFFECT            gpApplyShadowShader = NULL;
 
 // Light Color
 D3DXVECTOR4             gLightColor(0.7f, 0.7f, 1.0f, 1.0f);
+
+LPD3DXEFFECT            gpCreateShadowShader = NULL;
+
+
 
 // Application name
 const char*				gAppName = "Super Simple Shader Demo Framework";
@@ -182,16 +186,44 @@ void RenderFrame()
 // draw 3D objects and so on
 void RenderScene()
 {
-    // View Matrix
-    D3DXMATRIXA16 matView;
-    D3DXVECTOR3 vEyePt(gWorldCameraPosition.x, gWorldCameraPosition.y, gWorldCameraPosition.z);
-    D3DXVECTOR3 vLookatPt(0.0f, 0.0f, 0.0f);
-    D3DXVECTOR3 vUpVec(0.0f, 1.0f, 0.0f);
-    D3DXMatrixLookAtLH(&matView, &vEyePt, &vLookatPt, &vUpVec);
+    // create light-view matrix
+    D3DXMATRIXA16 matLightView;
+    {
+        D3DXVECTOR3 vEyePt(gWorldCameraPosition.x, gWorldCameraPosition.y, gWorldCameraPosition.z);
+        D3DXVECTOR3 vLookatPt(0.0f, 0.0f, 0.0f);
+        D3DXVECTOR3 vUpVec(0.0f, 1.0f, 0.0f);
+        D3DXMatrixLookAtLH(&matLightView, &vEyePt, &vLookatPt, &vUpVec);
+    }
+
+    // create light-projection matrix
+    D3DXMATRIXA16 matLightProjection;
+    {
+        D3DXMatrixPerspectiveFovLH(&matLightProjection, D3DX_PI / 4.0f, 1, 1, 1000);
+    }
+
+
 
     // projection matrix
     D3DXMATRIXA16 matProjection;
     D3DXMatrixPerspectiveFovLH(&matProjection, FOV, ASPECT_RATIO, NEAR_PLANE, FAR_PLANE);
+
+
+    D3DXMATRIXA16 matViewProjection;
+    {
+        // View Matrix
+        D3DXMATRIXA16 matView;
+        D3DXVECTOR3 vEyePt(gWorldCameraPosition.x, gWorldCameraPosition.y, gWorldCameraPosition.z);
+        D3DXVECTOR3 vLookatPt(0.0f, 0.0f, 0.0f);
+        D3DXVECTOR3 vUpVec(0.0f, 1.0f, 0.0f);
+        D3DXMatrixLookAtLH(&matView, &vEyePt, &vLookatPt, &vUpVec);
+
+        // Projection Matrix
+        D3DXMATRIXA16 matProjection;
+
+        D3DXMatrixPerspectiveFovLH(&matProjection, FOV, ASPECT_RATIO, NEAR_PLANE, FAR_PLANE);
+
+        D3DXMatrixMultiply(&matViewProjection, &matView, &matProjection);
+    }
 
     gRotY += 0.4f * PI / 180.0f;
 
@@ -201,47 +233,110 @@ void RenderScene()
     }
 
     // World Matrix
-    D3DXMATRIXA16 matWorld;
-    D3DXMatrixRotationY(&matWorld, gRotY);
+    D3DXMATRIXA16 matTorusWorld;
+    D3DXMatrixRotationY(&matTorusWorld, gRotY);
 
-    D3DXMATRIXA16 matInvWorld;
-    D3DXMatrixTranspose(&matInvWorld, &matWorld);
+    // World Matrix for plane
+    D3DXMATRIXA16 matDiscWorld;
+    {
+        D3DXMATRIXA16 matScale;
+        D3DXMatrixScaling(&matScale, 2, 2, 2);
 
-    // Concatenate World, View, Projection matrices
-    D3DXMATRIXA16 matWorldView;
-    D3DXMATRIXA16 matWorldViewProjection;
-    D3DXMatrixMultiply(&matWorldView, &matWorld, &matView);
-    D3DXMatrixMultiply(&matWorldViewProjection, &matWorldView, &matProjection);
+        D3DXMATRIXA16 matTrans;
+        D3DXMatrixTranslation(&matTrans, 0, -40, 0);
 
+        D3DXMatrixMultiply(&matDiscWorld, &matScale, &matTrans);
+    }
 
+    // current hardware backbuffer and depth buffer
+    LPDIRECT3DSURFACE9  pHWBackBuffer = NULL;
+    LPDIRECT3DSURFACE9  pHWDepthStencilBuffer = NULL;
+    gpD3DDevice->GetRenderTarget(0, &pHWBackBuffer);
 
-    ULONGLONG tick = GetTickCount64();
+    gpD3DDevice->GetDepthStencilSurface(&pHWDepthStencilBuffer);
 
-    gpUVAnimationShader->SetMatrix("gViewMatrix", &matView);
-    gpUVAnimationShader->SetMatrix("gProjectionMatrix", &matProjection);
-    gpUVAnimationShader->SetMatrix("gWorldMatrix", &matWorld);
-    gpUVAnimationShader->SetVector("gWorldLightPosition", &gWorldLightPosition);
-    gpUVAnimationShader->SetVector("gLightColor", &gLightColor);
-    gpUVAnimationShader->SetVector("gWorldCameraPosition", &gWorldCameraPosition);
-    gpUVAnimationShader->SetTexture("DiffuseMap_Tex", gpStoneDM);
-    gpUVAnimationShader->SetTexture("SpecularMap_Tex", gpStoneSM);
-    gpUVAnimationShader->SetFloat("gTime", tick/1000.0f);
-    gpUVAnimationShader->SetFloat("gWaveHeight", 3.0f);
-    gpUVAnimationShader->SetFloat("gSpeed", 2.0f);
-    gpUVAnimationShader->SetFloat("gWaveFrequency", 10.0f);
-    gpUVAnimationShader->SetFloat("gUVSpeed", 0.25f);
+    // create shadow
+    // use shadow render target and depth buffer
+    LPDIRECT3DSURFACE9 pShadowSurface = NULL;
+    HRESULT hr = gpShadowRenderTarget->GetSurfaceLevel(0, &pShadowSurface);
+    if (SUCCEEDED(hr))
+    {
+        gpD3DDevice->SetRenderTarget(0, pShadowSurface);
+        pShadowSurface->Release();
+        pShadowSurface = NULL;
+    }
+
+    gpD3DDevice->SetDepthStencilSurface(gpShadowDepthStencil);
+
+    // clears the shadow map from the last frame
+    gpD3DDevice->Clear(0, NULL, (D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER), 0xFFFFFFFF, 1.0f, 0);
+
+    // set global variables for shadow creating shader
+    gpCreateShadowShader->SetMatrix("gWorldMatrix", &matTorusWorld);
+    gpCreateShadowShader->SetMatrix("gLightViewMatrix", &matLightView);
+    gpCreateShadowShader->SetMatrix("gLightProjectionMatrix", &matLightProjection);
 
     UINT numPasses = 0;
-    gpUVAnimationShader->Begin(&numPasses, NULL);
+    gpCreateShadowShader->Begin(&numPasses, NULL);
 
     for (UINT i = 0; i < numPasses; ++i)
     {
-        gpUVAnimationShader->BeginPass(i);
+        gpCreateShadowShader->BeginPass(i);
         gpTorus->DrawSubset(0);
-        gpUVAnimationShader->EndPass();
+        gpCreateShadowShader->EndPass();
     }
 
-    gpUVAnimationShader->End();
+    gpCreateShadowShader->End();
+
+
+    // apply shadow
+    // use hardware back buffer and depth buffer
+
+    gpD3DDevice->SetRenderTarget(0, pHWBackBuffer);
+    gpD3DDevice->SetDepthStencilSurface(pHWDepthStencilBuffer);
+
+    pHWBackBuffer->Release();
+    pHWBackBuffer = NULL;
+
+    pHWDepthStencilBuffer->Release();
+    pHWDepthStencilBuffer = NULL;
+
+    ULONGLONG tick = GetTickCount64();
+
+    gpApplyShadowShader->SetMatrix("gWorldMatrix", &matTorusWorld);
+    gpApplyShadowShader->SetMatrix("gViewProjectionMatrix", &matViewProjection);
+   // gpApplyShadowShader->SetMatrix("gProjectionMatrix", &matProjection);
+    gpApplyShadowShader->SetMatrix("gLightViewMatrix", &matLightView);
+    gpApplyShadowShader->SetMatrix("gLightProjectionMatrix", &matLightProjection);
+    gpApplyShadowShader->SetVector("gWorldLightPosition", &gWorldLightPosition);
+    gpApplyShadowShader->SetVector("gObjectColor", &gTorusColor);
+    gpApplyShadowShader->SetTexture("ShadowMap_Tex", gpShadowRenderTarget);
+
+    //gpApplyShadowShader->SetVector("gWorldCameraPosition", &gWorldCameraPosition);
+    //gpApplyShadowShader->SetTexture("DiffuseMap_Tex", gpStoneDM);
+    //gpApplyShadowShader->SetTexture("SpecularMap_Tex", gpStoneSM);
+    //gpApplyShadowShader->SetFloat("gTime", tick / 1000.0f);
+    //gpApplyShadowShader->SetFloat("gWaveHeight", 3.0f);
+    //gpApplyShadowShader->SetFloat("gSpeed", 2.0f);
+    //gpApplyShadowShader->SetFloat("gWaveFrequency", 10.0f);
+    //gpApplyShadowShader->SetFloat("gUVSpeed", 0.25f);
+
+    numPasses = 0;
+    gpApplyShadowShader->Begin(&numPasses, NULL);
+
+    for (UINT i = 0; i < numPasses; ++i)
+    {
+        gpApplyShadowShader->BeginPass(i);
+        gpTorus->DrawSubset(0);
+
+        gpApplyShadowShader->SetMatrix("gWorldMatrix", &matDiscWorld);
+        gpApplyShadowShader->SetVector("gObjectColor", &gDiscColor);
+        gpApplyShadowShader->CommitChanges();
+        gpDisc->DrawSubset(0);
+        gpApplyShadowShader->EndPass();
+    }
+
+    gpApplyShadowShader->End();
 }
 
 // show debug info
@@ -285,6 +380,24 @@ bool InitEverything(HWND hWnd)
     if (FAILED(D3DXCreateFont(gpD3DDevice, 20, 10, FW_BOLD, 1, FALSE, DEFAULT_CHARSET,
         OUT_DEFAULT_PRECIS, DEFAULT_QUALITY, (DEFAULT_PITCH | FF_DONTCARE),
         "Arial", &gpFont)))
+    {
+        return false;
+    }
+
+    // create a render target
+    const int shadowMapSize = 2048;
+
+    HRESULT hr = gpD3DDevice->CreateTexture(shadowMapSize, shadowMapSize, 1, D3DUSAGE_RENDERTARGET, D3DFMT_R32F, D3DPOOL_DEFAULT, &gpShadowRenderTarget, NULL);
+
+    if (FAILED(hr))
+    {
+        return false;
+    }
+
+    // also need to make a depth buffer that has the same size as the shadow map
+    hr = gpD3DDevice->CreateDepthStencilSurface(shadowMapSize, shadowMapSize, D3DFMT_D24X8, D3DMULTISAMPLE_NONE, 0, TRUE, &gpShadowDepthStencil, NULL);
+
+    if (FAILED(hr))
     {
         return false;
     }
@@ -335,45 +448,31 @@ bool InitD3D(HWND hWnd)
 bool LoadAssets()
 {
     // shader loading
-    gpUVAnimationShader = LoadShader("UVAnimation.fx");
+    gpApplyShadowShader = LoadShader("ApplyShadow.fx");
 
-    if (!gpUVAnimationShader)
+    if (!gpApplyShadowShader)
     {
         return false;
     }
 
-    gpStoneDM = LoadTexture("Fieldstone_DM.tga");
+    gpCreateShadowShader = LoadShader("CreateShadow.fx");
 
-    if (!gpStoneDM)
+    if (!gpCreateShadowShader)
     {
         return false;
     }
-
-    gpStoneSM = LoadTexture("Fieldstone_SM.tga");
-
-    if (!gpStoneSM)
-    {
-        return false;
-    }
-
-    gpStoneNM = LoadTexture("Fieldstone_NM.tga");
-
-    if (!gpStoneNM)
-    {
-        return false;
-    }
-
-    // D3DXCreateCubeTextureFromFile(gpD3DDevice, "Snow_ENV.dds", &gpSnowENV);
-
-    //if (!gpSnowENV)
-   // {
-     //   return false;
-   // }
 
     // model loading
     gpTorus = LoadModel("torus.x");
 
     if (!gpTorus)
+    {
+        return false;
+    }
+
+    gpDisc = LoadModel("disc.x");
+
+    if (!gpDisc)
     {
         return false;
     }
@@ -462,35 +561,37 @@ void Cleanup()
         gpTorus = NULL;
     }
 
-    if (gpStoneDM)
+    if (gpDisc)
     {
-        gpStoneDM->Release();
-        gpStoneDM = NULL;
-    }
-
-    if (gpStoneSM)
-    {
-        gpStoneSM->Release();
-        gpStoneSM = NULL;
-    }
-
-    if (gpStoneNM)
-    {
-        gpStoneNM->Release();
-        gpStoneNM = NULL;
-    }
-
-    if (gpSnowENV)
-    {
-        gpSnowENV->Release();
-        gpSnowENV = NULL;
+        gpDisc->Release();
+        gpDisc = NULL;
     }
 
     // release shaders
-    if (gpUVAnimationShader)
+    if (gpApplyShadowShader)
     {
-        gpUVAnimationShader->Release();
-        gpUVAnimationShader = NULL;
+        gpApplyShadowShader->Release();
+        gpApplyShadowShader = NULL;
+    }
+
+    if (gpCreateShadowShader)
+    {
+        gpCreateShadowShader->Release();
+        gpCreateShadowShader = NULL;
+    }
+
+
+    // Release textures
+    if (gpShadowRenderTarget)
+    {
+        gpShadowRenderTarget->Release();
+        gpShadowRenderTarget = NULL;
+    }
+
+    if (gpShadowDepthStencil)
+    {
+        gpShadowDepthStencil->Release();
+        gpShadowDepthStencil = NULL;
     }
 
     // release D3D
