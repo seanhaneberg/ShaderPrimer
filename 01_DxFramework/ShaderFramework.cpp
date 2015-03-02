@@ -34,18 +34,19 @@ D3DXVECTOR4             gWorldCameraPosition(0.0f, 0.0f, -200.0f, 1.0f);
 LPDIRECT3DTEXTURE9      gpStoneDM = NULL;
 LPDIRECT3DTEXTURE9      gpStoneSM = NULL;
 LPDIRECT3DTEXTURE9      gpStoneNM = NULL;
+LPDIRECT3DCUBETEXTURE9  gpSnowENV = NULL;
 
 // Fonts
 ID3DXFont*              gpFont = NULL;
 
 // Models
-LPD3DXMESH              gpSphere = NULL;
+LPD3DXMESH              gpTorus = NULL;
 
 // Surface Color
 D3DXVECTOR4             gSurfaceColor(0, 1, 0, 1);
 
 // Shaders
-LPD3DXEFFECT            gpNormalMappingShader = NULL;
+LPD3DXEFFECT            gpUVAnimationShader = NULL;
 
 // Light Color
 D3DXVECTOR4             gLightColor(0.7f, 0.7f, 1.0f, 1.0f);
@@ -212,28 +213,35 @@ void RenderScene()
     D3DXMatrixMultiply(&matWorldView, &matWorld, &matView);
     D3DXMatrixMultiply(&matWorldViewProjection, &matWorldView, &matProjection);
 
-    
 
-    gpNormalMappingShader->SetMatrix("gWorldViewProjectionMatrix", &matWorldViewProjection);
-    gpNormalMappingShader->SetMatrix("gWorldMatrix", &matWorld);
-    gpNormalMappingShader->SetVector("gWorldLightPosition", &gWorldLightPosition);
-    gpNormalMappingShader->SetVector("gWorldCameraPosition", &gWorldCameraPosition);
-    gpNormalMappingShader->SetVector("gSurfaceColor", &gSurfaceColor);
-    gpNormalMappingShader->SetTexture("DiffuseMap_Tex", gpStoneDM);
-    gpNormalMappingShader->SetTexture("SpecularMap_Tex", gpStoneSM);
-    gpNormalMappingShader->SetTexture("NormalMap_Tex", gpStoneNM);
+
+    ULONGLONG tick = GetTickCount64();
+
+    gpUVAnimationShader->SetMatrix("gViewMatrix", &matView);
+    gpUVAnimationShader->SetMatrix("gProjectionMatrix", &matProjection);
+    gpUVAnimationShader->SetMatrix("gWorldMatrix", &matWorld);
+    gpUVAnimationShader->SetVector("gWorldLightPosition", &gWorldLightPosition);
+    gpUVAnimationShader->SetVector("gLightColor", &gLightColor);
+    gpUVAnimationShader->SetVector("gWorldCameraPosition", &gWorldCameraPosition);
+    gpUVAnimationShader->SetTexture("DiffuseMap_Tex", gpStoneDM);
+    gpUVAnimationShader->SetTexture("SpecularMap_Tex", gpStoneSM);
+    gpUVAnimationShader->SetFloat("gTime", tick/1000.0f);
+    gpUVAnimationShader->SetFloat("gWaveHeight", 3.0f);
+    gpUVAnimationShader->SetFloat("gSpeed", 2.0f);
+    gpUVAnimationShader->SetFloat("gWaveFrequency", 10.0f);
+    gpUVAnimationShader->SetFloat("gUVSpeed", 0.25f);
 
     UINT numPasses = 0;
-    gpNormalMappingShader->Begin(&numPasses, NULL);
+    gpUVAnimationShader->Begin(&numPasses, NULL);
 
     for (UINT i = 0; i < numPasses; ++i)
     {
-        gpNormalMappingShader->BeginPass(i);
-        gpSphere->DrawSubset(0);
-        gpNormalMappingShader->EndPass();
+        gpUVAnimationShader->BeginPass(i);
+        gpTorus->DrawSubset(0);
+        gpUVAnimationShader->EndPass();
     }
 
-    gpNormalMappingShader->End();
+    gpUVAnimationShader->End();
 }
 
 // show debug info
@@ -327,9 +335,9 @@ bool InitD3D(HWND hWnd)
 bool LoadAssets()
 {
     // shader loading
-    gpNormalMappingShader = LoadShader("NormalMapping.fx");
+    gpUVAnimationShader = LoadShader("UVAnimation.fx");
 
-    if (!gpNormalMappingShader)
+    if (!gpUVAnimationShader)
     {
         return false;
     }
@@ -355,10 +363,17 @@ bool LoadAssets()
         return false;
     }
 
-    // model loading
-    gpSphere = LoadModel("SphereWithTangent.x");
+    // D3DXCreateCubeTextureFromFile(gpD3DDevice, "Snow_ENV.dds", &gpSnowENV);
 
-    if (!gpSphere)
+    //if (!gpSnowENV)
+   // {
+     //   return false;
+   // }
+
+    // model loading
+    gpTorus = LoadModel("torus.x");
+
+    if (!gpTorus)
     {
         return false;
     }
@@ -441,10 +456,10 @@ void Cleanup()
     }
 
     // release models
-    if (gpSphere)
+    if (gpTorus)
     {
-        gpSphere->Release();
-        gpSphere = NULL;
+        gpTorus->Release();
+        gpTorus = NULL;
     }
 
     if (gpStoneDM)
@@ -465,11 +480,17 @@ void Cleanup()
         gpStoneNM = NULL;
     }
 
-    // release shaders
-    if (gpNormalMappingShader)
+    if (gpSnowENV)
     {
-        gpNormalMappingShader->Release();
-        gpNormalMappingShader = NULL;
+        gpSnowENV->Release();
+        gpSnowENV = NULL;
+    }
+
+    // release shaders
+    if (gpUVAnimationShader)
+    {
+        gpUVAnimationShader->Release();
+        gpUVAnimationShader = NULL;
     }
 
     // release D3D
