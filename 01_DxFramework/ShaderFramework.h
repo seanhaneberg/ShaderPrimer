@@ -36,6 +36,8 @@ LPD3DXMESH LoadModel(const char * filename);
 // game loop related
 void PlayDemo();
 void Update();
+void InitFullScreenQuad();
+
 
 // Rendering related
 void RenderFrame();

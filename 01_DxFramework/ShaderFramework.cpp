@@ -30,30 +30,37 @@ LPDIRECT3DDEVICE9       gpD3DDevice = NULL;				// D3D device
 D3DXVECTOR4             gWorldLightPosition(500.0f, 500.0f, -500.0f, 1.0f);
 D3DXVECTOR4             gWorldCameraPosition(0.0f, 0.0f, -200.0f, 1.0f);
 
+// fullscreen quad
+LPDIRECT3DVERTEXDECLARATION9 gpFullscreenQuadDecl = NULL;
+LPDIRECT3DVERTEXBUFFER9 gpFullscreenQuadVB = NULL;
+LPDIRECT3DINDEXBUFFER9 gpFullscreenQuadIB = NULL;
+
 // Fonts
 ID3DXFont*              gpFont = NULL;
 
 // Models
-LPD3DXMESH              gpDisc = NULL;
-LPD3DXMESH              gpTorus = NULL;
+LPD3DXMESH              gpTeapot = NULL;
 
 // Surface Color
-D3DXVECTOR4             gTorusColor(1, 1, 0, 1);
-D3DXVECTOR4             gDiscColor(0, 1, 1, 1);
-
-// Shadow Map Render Target
-LPDIRECT3DTEXTURE9      gpShadowRenderTarget = NULL;
-LPDIRECT3DSURFACE9      gpShadowDepthStencil = NULL;
+D3DXVECTOR4             gpTeapotColor(1, 1, 0, 1);
 
 // Shaders
-LPD3DXEFFECT            gpApplyShadowShader = NULL;
+LPD3DXEFFECT            gpEnvironmentMappingShader = NULL;
+LPD3DXEFFECT            gpNoEffect = NULL;
+LPD3DXEFFECT            gpGrayScale = NULL;
+LPD3DXEFFECT            gpSepia = NULL;
 
 // Light Color
 D3DXVECTOR4             gLightColor(0.7f, 0.7f, 1.0f, 1.0f);
 
-LPD3DXEFFECT            gpCreateShadowShader = NULL;
+// Textures
+LPDIRECT3DTEXTURE9      gpTeapotDM = NULL;
+LPDIRECT3DTEXTURE9      gpTeapotNM = NULL;
+LPDIRECT3DTEXTURE9      gpTeapotSM = NULL;
+LPDIRECT3DCUBETEXTURE9  gpSnowENV = NULL;
 
-
+// scene render target
+LPDIRECT3DTEXTURE9      gpSceneRenderTarget = NULL;
 
 // Application name
 const char*				gAppName = "Super Simple Shader Demo Framework";
@@ -61,6 +68,8 @@ const char*				gAppName = "Super Simple Shader Demo Framework";
 // Rotation
 float gRotY = 0.0f;
 
+// index of postprocess shader to use
+int gPostProcessIndex = 0;
 
 //-----------------------------------------------------------------------
 // Application entry point/message loop
@@ -141,6 +150,11 @@ void ProcessInput(HWND hWnd, WPARAM keyPress)
 {
     switch (keyPress)
     {
+    case '1':
+    case '2':
+    case '3':
+        gPostProcessIndex = keyPress - '0' - 1;
+        break;
         // when ESC key is pressed, quit the demo
     case VK_ESCAPE:
         PostMessage(hWnd, WM_DESTROY, 0L, 0L);
@@ -201,12 +215,9 @@ void RenderScene()
         D3DXMatrixPerspectiveFovLH(&matLightProjection, D3DX_PI / 4.0f, 1, 1, 1000);
     }
 
-
-
     // projection matrix
     D3DXMATRIXA16 matProjection;
     D3DXMatrixPerspectiveFovLH(&matProjection, FOV, ASPECT_RATIO, NEAR_PLANE, FAR_PLANE);
-
 
     D3DXMATRIXA16 matViewProjection;
     {
@@ -233,110 +244,97 @@ void RenderScene()
     }
 
     // World Matrix
-    D3DXMATRIXA16 matTorusWorld;
-    D3DXMatrixRotationY(&matTorusWorld, gRotY);
+    D3DXMATRIXA16 matWorld;
+    D3DXMatrixRotationY(&matWorld, gRotY);
 
-    // World Matrix for plane
-    D3DXMATRIXA16 matDiscWorld;
-    {
-        D3DXMATRIXA16 matScale;
-        D3DXMatrixScaling(&matScale, 2, 2, 2);
+    D3DXMATRIXA16 matWorldViewProjection;
+    D3DXMatrixMultiply(&matWorldViewProjection, &matViewProjection, &matWorld);
 
-        D3DXMATRIXA16 matTrans;
-        D3DXMatrixTranslation(&matTrans, 0, -40, 0);
-
-        D3DXMatrixMultiply(&matDiscWorld, &matScale, &matTrans);
-    }
-
-    // current hardware backbuffer and depth buffer
+    // 1. draw the scene into the render target
+    // current hardware backbuffer
     LPDIRECT3DSURFACE9  pHWBackBuffer = NULL;
-    LPDIRECT3DSURFACE9  pHWDepthStencilBuffer = NULL;
     gpD3DDevice->GetRenderTarget(0, &pHWBackBuffer);
 
-    gpD3DDevice->GetDepthStencilSurface(&pHWDepthStencilBuffer);
+    // draw onto the render target 
+    LPDIRECT3DSURFACE9  pSceneSurface = NULL;
 
-    // create shadow
-    // use shadow render target and depth buffer
-    LPDIRECT3DSURFACE9 pShadowSurface = NULL;
-    HRESULT hr = gpShadowRenderTarget->GetSurfaceLevel(0, &pShadowSurface);
+    HRESULT hr = gpSceneRenderTarget->GetSurfaceLevel(0, &pSceneSurface);
+
     if (SUCCEEDED(hr))
     {
-        gpD3DDevice->SetRenderTarget(0, pShadowSurface);
-        pShadowSurface->Release();
-        pShadowSurface = NULL;
+        gpD3DDevice->SetRenderTarget(0, pSceneSurface);
+        pSceneSurface->Release();
+        pSceneSurface = NULL;
     }
-
-    gpD3DDevice->SetDepthStencilSurface(gpShadowDepthStencil);
 
     // clears the shadow map from the last frame
     gpD3DDevice->Clear(0, NULL, (D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER), 0xFFFFFFFF, 1.0f, 0);
 
-    // set global variables for shadow creating shader
-    gpCreateShadowShader->SetMatrix("gWorldMatrix", &matTorusWorld);
-    gpCreateShadowShader->SetMatrix("gLightViewMatrix", &matLightView);
-    gpCreateShadowShader->SetMatrix("gLightProjectionMatrix", &matLightProjection);
+    // Vectors
+    gpEnvironmentMappingShader->SetVector("gLightColor", &gLightColor);
+    gpEnvironmentMappingShader->SetVector("gWorldLightPosition", &gWorldLightPosition);
+    gpEnvironmentMappingShader->SetVector("gWorldCameraPosition", &gWorldCameraPosition);
+    
+    // Matrices
+    gpEnvironmentMappingShader->SetMatrix("gWorldMatrix", &matWorld);
+    gpEnvironmentMappingShader->SetMatrix("gWorldViewProjectionMatrix", &matWorldViewProjection);
+    
+    // Textures
+    gpEnvironmentMappingShader->SetTexture("DiffuseMap_Tex", gpTeapotDM);
+    gpEnvironmentMappingShader->SetTexture("NormalMap_Tex", gpTeapotNM);
+    gpEnvironmentMappingShader->SetTexture("SpecularMap_Tex", gpTeapotSM);
+    gpEnvironmentMappingShader->SetTexture("EnvironmentMap_Tex", gpSnowENV);
 
     UINT numPasses = 0;
-    gpCreateShadowShader->Begin(&numPasses, NULL);
+    gpEnvironmentMappingShader->Begin(&numPasses, NULL);
 
     for (UINT i = 0; i < numPasses; ++i)
     {
-        gpCreateShadowShader->BeginPass(i);
-        gpTorus->DrawSubset(0);
-        gpCreateShadowShader->EndPass();
+        gpEnvironmentMappingShader->BeginPass(i);
+        gpTeapot->DrawSubset(0);
+        gpEnvironmentMappingShader->EndPass();
     }
 
-    gpCreateShadowShader->End();
+    gpEnvironmentMappingShader->End();
 
+    // 2. apply post-processing
 
-    // apply shadow
-    // use hardware back buffer and depth buffer
-
+    // use hardware backbuffer
     gpD3DDevice->SetRenderTarget(0, pHWBackBuffer);
-    gpD3DDevice->SetDepthStencilSurface(pHWDepthStencilBuffer);
-
     pHWBackBuffer->Release();
     pHWBackBuffer = NULL;
 
-    pHWDepthStencilBuffer->Release();
-    pHWDepthStencilBuffer = NULL;
+    // post process effect to use 
+    LPD3DXEFFECT effectToUse = gpNoEffect;
 
-    ULONGLONG tick = GetTickCount64();
-
-    gpApplyShadowShader->SetMatrix("gWorldMatrix", &matTorusWorld);
-    gpApplyShadowShader->SetMatrix("gViewProjectionMatrix", &matViewProjection);
-   // gpApplyShadowShader->SetMatrix("gProjectionMatrix", &matProjection);
-    gpApplyShadowShader->SetMatrix("gLightViewMatrix", &matLightView);
-    gpApplyShadowShader->SetMatrix("gLightProjectionMatrix", &matLightProjection);
-    gpApplyShadowShader->SetVector("gWorldLightPosition", &gWorldLightPosition);
-    gpApplyShadowShader->SetVector("gObjectColor", &gTorusColor);
-    gpApplyShadowShader->SetTexture("ShadowMap_Tex", gpShadowRenderTarget);
-
-    //gpApplyShadowShader->SetVector("gWorldCameraPosition", &gWorldCameraPosition);
-    //gpApplyShadowShader->SetTexture("DiffuseMap_Tex", gpStoneDM);
-    //gpApplyShadowShader->SetTexture("SpecularMap_Tex", gpStoneSM);
-    //gpApplyShadowShader->SetFloat("gTime", tick / 1000.0f);
-    //gpApplyShadowShader->SetFloat("gWaveHeight", 3.0f);
-    //gpApplyShadowShader->SetFloat("gSpeed", 2.0f);
-    //gpApplyShadowShader->SetFloat("gWaveFrequency", 10.0f);
-    //gpApplyShadowShader->SetFloat("gUVSpeed", 0.25f);
-
-    numPasses = 0;
-    gpApplyShadowShader->Begin(&numPasses, NULL);
-
-    for (UINT i = 0; i < numPasses; ++i)
+    if (gPostProcessIndex == 1)
     {
-        gpApplyShadowShader->BeginPass(i);
-        gpTorus->DrawSubset(0);
-
-        gpApplyShadowShader->SetMatrix("gWorldMatrix", &matDiscWorld);
-        gpApplyShadowShader->SetVector("gObjectColor", &gDiscColor);
-        gpApplyShadowShader->CommitChanges();
-        gpDisc->DrawSubset(0);
-        gpApplyShadowShader->EndPass();
+        effectToUse = gpGrayScale;
+    }
+    else if (gPostProcessIndex == 2)
+    {
+        effectToUse = gpSepia;
     }
 
-    gpApplyShadowShader->End();
+    numPasses = 0;
+    effectToUse->SetTexture("SceneTexture_Tex", gpSceneRenderTarget);
+    effectToUse->Begin(&numPasses, NULL);
+    {
+        for (UINT i = 0; i < numPasses; ++i)
+        {
+            effectToUse->BeginPass(i);
+            {
+                // draw a fullscreen quad
+                gpD3DDevice->SetStreamSource(0, gpFullscreenQuadVB, 0, sizeof(float) * 5);
+                gpD3DDevice->SetIndices(gpFullscreenQuadIB);
+                gpD3DDevice->SetVertexDeclaration(gpFullscreenQuadDecl);
+                gpD3DDevice->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, 6, 0, 2);
+            }
+            effectToUse->EndPass();
+        }
+    }
+    effectToUse->End();
+
 }
 
 // show debug info
@@ -353,7 +351,7 @@ void RenderInfo()
     rct.bottom = WIN_HEIGHT / 3;
 
     // show debug keys
-    gpFont->DrawText(NULL, "Demo Framework\n\nESC: Quit demo", -1, &rct, 0, fontColor);
+    gpFont->DrawText(NULL, "Demo Framework\n\nESC: Quit demo\n1: Color \n2: Black and White\n3: Sepia", -1, &rct, 0, fontColor);
 }
 
 //------------------------------------------------------------
@@ -369,6 +367,17 @@ bool InitEverything(HWND hWnd)
         return false;
     }
 
+    // create a fullscreen quad
+    InitFullScreenQuad();
+
+    // create a render target
+    HRESULT hr = gpD3DDevice->CreateTexture(WIN_WIDTH, WIN_HEIGHT, 1, D3DUSAGE_RENDERTARGET, D3DFMT_X8R8G8B8, D3DPOOL_DEFAULT, &gpSceneRenderTarget, NULL);
+
+    if (FAILED(hr))
+    {
+        return false;
+    }
+
     // loading models, shaders and textures
     if (!LoadAssets())
     {
@@ -380,24 +389,6 @@ bool InitEverything(HWND hWnd)
     if (FAILED(D3DXCreateFont(gpD3DDevice, 20, 10, FW_BOLD, 1, FALSE, DEFAULT_CHARSET,
         OUT_DEFAULT_PRECIS, DEFAULT_QUALITY, (DEFAULT_PITCH | FF_DONTCARE),
         "Arial", &gpFont)))
-    {
-        return false;
-    }
-
-    // create a render target
-    const int shadowMapSize = 2048;
-
-    HRESULT hr = gpD3DDevice->CreateTexture(shadowMapSize, shadowMapSize, 1, D3DUSAGE_RENDERTARGET, D3DFMT_R32F, D3DPOOL_DEFAULT, &gpShadowRenderTarget, NULL);
-
-    if (FAILED(hr))
-    {
-        return false;
-    }
-
-    // also need to make a depth buffer that has the same size as the shadow map
-    hr = gpD3DDevice->CreateDepthStencilSurface(shadowMapSize, shadowMapSize, D3DFMT_D24X8, D3DMULTISAMPLE_NONE, 0, TRUE, &gpShadowDepthStencil, NULL);
-
-    if (FAILED(hr))
     {
         return false;
     }
@@ -447,32 +438,69 @@ bool InitD3D(HWND hWnd)
 
 bool LoadAssets()
 {
-    // shader loading
-    gpApplyShadowShader = LoadShader("ApplyShadow.fx");
+    // cubemap
+    D3DXCreateCubeTextureFromFile(gpD3DDevice, "Snow_ENV.dds", &gpSnowENV);
 
-    if (!gpApplyShadowShader)
+    if (!gpSnowENV)
     {
         return false;
     }
 
-    gpCreateShadowShader = LoadShader("CreateShadow.fx");
+    // shader loading
+    gpEnvironmentMappingShader = LoadShader("EnvironmentMapping.fx");
 
-    if (!gpCreateShadowShader)
+    if (!gpEnvironmentMappingShader)
+    {
+        return false;
+    }
+    
+    gpNoEffect = LoadShader("NoEffect.fx");
+
+    if (!gpNoEffect)
+    {
+        return false;
+    }
+
+    gpGrayScale = LoadShader("Grayscale.fx");
+
+    if (!gpGrayScale)
+    {
+        return false;
+    }
+
+    gpSepia = LoadShader("Sepia.fx");
+
+    if (!gpSepia)
+    {
+        return false;
+    }
+
+    // textures
+    gpTeapotDM = LoadTexture("Fieldstone_DM.tga");
+    
+    if (!gpTeapotDM)
+    {
+        return false;
+    }
+    
+    gpTeapotNM = LoadTexture("Fieldstone_NM.tga");
+
+    if (!gpTeapotNM)
+    {
+        return false;
+    }
+
+    gpTeapotSM = LoadTexture("Fieldstone_SM.tga");
+
+    if (!gpTeapotSM)
     {
         return false;
     }
 
     // model loading
-    gpTorus = LoadModel("torus.x");
+    gpTeapot = LoadModel("TeapotWithTangent.x");
 
-    if (!gpTorus)
-    {
-        return false;
-    }
-
-    gpDisc = LoadModel("disc.x");
-
-    if (!gpDisc)
+    if (!gpTeapot)
     {
         return false;
     }
@@ -541,12 +569,133 @@ LPDIRECT3DTEXTURE9 LoadTexture(const char * filename)
 
     return ret;
 }
+
+//------------------------------------------------------------
+// fullscreen quad
+//------------------------------------------------------------
+void InitFullScreenQuad()
+{
+    D3DVERTEXELEMENT9 vtxDesc[3];
+    int offset = 0;
+    int i = 0;
+
+    // position
+    vtxDesc[i].Stream = 0;
+    vtxDesc[i].Offset = offset;
+    vtxDesc[i].Type = D3DDECLTYPE_FLOAT3;
+    vtxDesc[i].Method = D3DDECLMETHOD_DEFAULT;
+    vtxDesc[i].Usage = D3DDECLUSAGE_POSITION;
+    vtxDesc[i].UsageIndex = 0;
+
+    offset += sizeof(float) * 3;
+    ++i;
+
+    // UV coords 0 
+    vtxDesc[i].Stream = 0;
+    vtxDesc[i].Offset = offset;
+    vtxDesc[i].Type = D3DDECLTYPE_FLOAT2;
+    vtxDesc[i].Method = D3DDECLMETHOD_DEFAULT;
+    vtxDesc[i].Usage = D3DDECLUSAGE_TEXCOORD;
+    vtxDesc[i].UsageIndex = 0;
+    
+    offset += sizeof(float) * 2;
+    ++i;
+
+    // end of the vertex format (D3DDECL_END())
+    vtxDesc[i].Stream = 0xFF;
+    vtxDesc[i].Offset = 0;
+    vtxDesc[i].Type = D3DDECLTYPE_UNUSED;
+    vtxDesc[i].Method = 0;
+    vtxDesc[i].Usage = 0;
+    vtxDesc[i].UsageIndex = 0;
+
+    gpD3DDevice->CreateVertexDeclaration(vtxDesc, &gpFullscreenQuadDecl);
+
+    gpD3DDevice->CreateVertexBuffer(offset * 4, 0, 0, D3DPOOL_MANAGED, &gpFullscreenQuadVB, NULL);
+
+    void * vertexData = NULL;
+    gpFullscreenQuadVB->Lock(0, 0, &vertexData, 0);
+    {
+        float* data = (float*)vertexData;
+        // Pos0
+        *data++ = -1.0f;
+        *data++ = 1.0f;
+        *data++ = 0.0f;
+
+        // UV0
+        *data++ = 0.0f;
+        *data++ = 0.0f;
+
+        // Pos1
+        *data++ = 1.0f;
+        *data++ = 1.0f;
+        *data++ = 0.0f;
+
+        // UV1
+        *data++ = 1.0f;
+        *data++ = 0.0f;
+
+        // Pos2
+        *data++ = 1.0f;
+        *data++ = -1.0f;
+        *data++ = 0.0f;
+
+        // UV2
+        *data++ = 1.0f;
+        *data++ = 1.0f;
+
+        // Pos3
+        *data++ = -1.0f;
+        *data++ = -1.0f;
+        *data++ = 0.0f;
+
+        // UV3 
+        *data++ = 0.0f;
+        *data++ = 1.0f;
+    } 
+    gpFullscreenQuadVB->Unlock();
+
+    // create an index buffer
+    gpD3DDevice->CreateIndexBuffer(sizeof(short) * 6, 0, D3DFMT_INDEX16, D3DPOOL_MANAGED, &gpFullscreenQuadIB, NULL);
+
+    void * indexData = NULL;
+    gpFullscreenQuadIB->Lock(0, 0, &indexData, 0);
+    {
+        unsigned short * data = (unsigned short*)indexData;
+        *data++ = 0;
+        *data++ = 1;
+        *data++ = 3;
+        *data++ = 3;
+        *data++ = 1;
+        *data++ = 2;
+    }
+    gpFullscreenQuadIB->Unlock();
+}
+
 //------------------------------------------------------------
 // cleanup code
 //------------------------------------------------------------
 
 void Cleanup()
 {
+    if (gpFullscreenQuadDecl)
+    {
+        gpFullscreenQuadDecl->Release();
+        gpFullscreenQuadDecl = NULL;
+    }
+    
+    if (gpFullscreenQuadVB)
+    {
+        gpFullscreenQuadVB->Release();
+        gpFullscreenQuadVB = NULL;
+    }
+
+    if (gpFullscreenQuadIB)
+    {
+        gpFullscreenQuadIB->Release();
+        gpFullscreenQuadIB = NULL;
+    }
+
     // release fonts
     if (gpFont)
     {
@@ -555,43 +704,43 @@ void Cleanup()
     }
 
     // release models
-    if (gpTorus)
+    if (gpTeapot)
     {
-        gpTorus->Release();
-        gpTorus = NULL;
-    }
-
-    if (gpDisc)
-    {
-        gpDisc->Release();
-        gpDisc = NULL;
+        gpTeapot->Release();
+        gpTeapot = NULL;
     }
 
     // release shaders
-    if (gpApplyShadowShader)
+    if (gpEnvironmentMappingShader)
     {
-        gpApplyShadowShader->Release();
-        gpApplyShadowShader = NULL;
+        gpEnvironmentMappingShader->Release();
+        gpEnvironmentMappingShader = NULL;
     }
 
-    if (gpCreateShadowShader)
+    if (gpNoEffect)
     {
-        gpCreateShadowShader->Release();
-        gpCreateShadowShader = NULL;
+        gpNoEffect->Release();
+        gpNoEffect = NULL;
     }
 
 
     // Release textures
-    if (gpShadowRenderTarget)
+    if (gpGrayScale)
     {
-        gpShadowRenderTarget->Release();
-        gpShadowRenderTarget = NULL;
+        gpGrayScale->Release();
+        gpGrayScale = NULL;
     }
 
-    if (gpShadowDepthStencil)
+    if (gpSepia)
     {
-        gpShadowDepthStencil->Release();
-        gpShadowDepthStencil = NULL;
+        gpSepia->Release();
+        gpSepia = NULL;
+    }
+
+    if (gpSceneRenderTarget)
+    {
+        gpSceneRenderTarget->Release();
+        gpSceneRenderTarget = NULL;
     }
 
     // release D3D
